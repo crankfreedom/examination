@@ -30,10 +30,11 @@ type RequestHandler = (req: Request, res: Response) => Promise<ApiResponse> | Ap
 export async function resWrapper(handler: RequestHandler, req: Request, res: Response,): Promise<void> {
   try {
     const result = await handler(req, res)
-    res.json(result)
+    // 若 handler 已自行向 res 写入响应（如文件下载流式响应），则不再发送 JSON
+    if (!res.headersSent) res.json(result)
   } catch (error) {
     const message = error instanceof Error ? error.message : '服务内部错误'
     console.error('[Response Error]', message)
-    res.json(failRes({ code: '000001', message: '服务内部错误' }))
+    if (!res.headersSent) res.json(failRes({ code: '000001', message: '服务内部错误' }))
   }
 }

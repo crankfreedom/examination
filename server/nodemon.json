@@ -1,5 +1,5 @@
 {
-  "watch": ["src"],
+  "watch": ["src", "dict"],
   "ext": "ts,json",
   "ignore": ["dist", "node_modules"],
   "exec": "vite-node src/app.ts",

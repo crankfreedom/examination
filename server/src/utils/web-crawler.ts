@@ -1,4 +1,4 @@
-﻿import { Builder, By, until, type WebDriver, type WebElement, type Locator } from 'selenium-webdriver'
+﻿import { Builder, By, until, error, type WebDriver, type WebElement, type Locator } from 'selenium-webdriver'
 import Save from '@/utils/save'
 import * as chrome from 'selenium-webdriver/chrome'
 import type { ContentBlock } from '@/modules/chalk/types'
@@ -109,6 +109,29 @@ export class WebCrawler {
    }
  }
 
+  /** 读取当前页面的全部 Cookies，返回键值对对象 */
+  async getCookies(): Promise<Record<string, string>> {
+    const driver = this.getDriver()
+    const cookies = await driver.manage().getCookies()
+    const result: Record<string, string> = {}
+    for (const cookie of cookies) {
+      result[cookie.name] = cookie.value
+    }
+    return result
+  }
+
+  /** 读取当前页面指定名称的 Cookie 值，不存在时返回 null */
+  async getCookie(name: string): Promise<string | null> {
+    const driver = this.getDriver()
+    try {
+      const cookie = await driver.manage().getCookie(name)
+      return cookie?.value ?? null
+    } catch (err) {
+      if (err instanceof error.NoSuchCookieError) return null
+      throw err
+    }
+  }
+
   /** 读取当前页面的全部 localStorage，返回键值对对象 */
   async getLocalStorage(): Promise<Record<string, string>> {
     const driver = this.getDriver()
@@ -133,15 +156,78 @@ export class WebCrawler {
     )
   }
 
-  /** 对元素截图并保存 */
+  /** 对元素截图并保存。对 <img> 会先确保图片真正加载完成，避免截到空白占位图。 */
   async getImage(element: WebElement, dir: string): Promise<ScreenshotResult> {
     const driver = this.getDriver()
-    await driver.executeScript<void>('arguments[0].scrollIntoView()', element)
-    await this.sleep(400)
+    const isImg = (await element.getTagName()) === 'img'
+    let naturalW = 0
+    let naturalH = 0
+
+    if (isImg) {
+      // 滚动到可视区以触发懒加载，再等待真实图片加载完成
+      await driver.executeScript<void>(
+        'arguments[0].scrollIntoView({block: "center", inline: "center"})',
+        element,
+      )
+      const dims = await this.ensureImageLoaded(element)
+      naturalW = dims.naturalWidth
+      naturalH = dims.naturalHeight
+      // 加载后元素尺寸可能变化，再次居中以稳定截图
+      await driver.executeScript<void>(
+        'arguments[0].scrollIntoView({block: "center", inline: "center"})',
+        element,
+      )
+    } else {
+      await driver.executeScript<void>('arguments[0].scrollIntoView()', element)
+    }
+
+    await this.sleep(300)
     const { width, height } = await element.getRect()
     const base64 = await element.takeScreenshot()
     const name = this.save.saveImage({ base64, dir: `${dir}/image` })
-    return { name, width, height }
+    return { name, width: naturalW || width, height: naturalH || height }
+  }
+
+  /**
+   * 解析 <img> 的真实地址（兼容 data-src 等懒加载写法），强制加载并等待解码完成。
+   * 返回图片 intrinsic 宽高；加载失败或超时返回 0,0。
+   */
+  private async ensureImageLoaded(
+    img: WebElement,
+  ): Promise<{ naturalWidth: number; naturalHeight: number }> {
+    const driver = this.getDriver()
+
+    // 若存在懒加载真实地址且与当前 src 不是同一张图，则覆盖 src 触发加载
+    await driver.executeScript<void>(
+      `
+      const img = arguments[0]
+      const attrs = ['data-src', 'data-original', 'data-lazy-src', 'lz_src', 'data-echo', 'data-img', 'data-url']
+      try {
+        for (const a of attrs) {
+          const v = img.getAttribute(a)
+          if (!v) continue
+          const resolved = new URL(v, location.href).href
+          if (resolved !== img.src) { img.src = resolved; break }
+        }
+      } catch (e) { /* 解析失败则保持原 src */ }
+      `,
+      img,
+    )
+
+    // 轮询等待加载完成（complete 为 true 且 naturalWidth > 0 才算成功）
+    const deadline = Date.now() + 10000
+    while (Date.now() < deadline) {
+      const state = await driver.executeScript<[boolean, number, number]>(
+        `return [arguments[0].complete, arguments[0].naturalWidth, arguments[0].naturalHeight]`,
+        img,
+      )
+      const [complete, nw, nh] = state
+      if (complete && nw > 0) return { naturalWidth: nw, naturalHeight: nh }
+      if (complete && nw === 0) break // 加载失败（404 等），提前退出
+      await this.sleep(150)
+    }
+    console.warn('[WebCrawler] 图片加载超时或失败，截图可能为空白')
+    return { naturalWidth: 0, naturalHeight: 0 }
   }
 
   /** 提取元素 innerHTML，分离图片和文本 */

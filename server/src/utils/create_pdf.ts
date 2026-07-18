@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { Builder } from 'selenium-webdriver'
+import { Builder, type WebDriver } from 'selenium-webdriver'
 import * as chrome from 'selenium-webdriver/chrome'
 import type {
   ContentBlock,
@@ -177,19 +177,20 @@ function renderPaperHtml(paper: SmartPaperJSON, imageMap: Map<string, ImageMeta>
   .section-title { font-family: "SimHei", "黑体", sans-serif; font-size: 13.5pt; font-weight: bold; border-bottom: 1.5px solid #333; padding-bottom: 1.5mm; margin: 0 0 3mm; }
   .section-tip { font-size: 10.5pt; color: #555; margin: 0 0 4mm; }
   .materials { background: #f6f6f6; border-left: 3px solid #bbb; padding: 2.5mm 4mm; margin: 0 0 5mm; }
-  .q { margin: 0 0 5mm; page-break-inside: avoid; }
-  .q-head { font-weight: bold; }
+  /* 题目跨页连续排版，不强制每题独占；仅图片整体不可拆，放不下才移至下页留白 */
+  .q { margin: 0 0 5mm; }
+  .q-head { font-weight: bold; break-after: avoid; page-break-after: avoid; }
   .q-type { font-weight: normal; font-size: 10.5pt; color: #666; margin-left: 2mm; }
   .q-body { margin: 1mm 0 2mm; }
   .opts { margin: 0; }
   .opt { margin: 1mm 0; }
-  .opt-label { font-weight: bold; }
+  .opt-label { font-weight: bold; break-after: avoid; page-break-after: avoid; }
   .ans { margin-top: 2mm; font-size: 11.5pt; }
   .ans .lab { font-weight: bold; color: #c0392b; }
   .ans .item { margin: 0.5mm 0; }
   .kp { color: #2a4d8f; }
   .src { color: #888; font-size: 10pt; }
-  img { border: 0; max-width: 100%; height: auto; }
+  img { border: 0; max-width: 100%; height: auto; break-inside: avoid; page-break-inside: avoid; }
   img.inline { vertical-align: middle; }
   img.block { display: block; margin: 2mm auto; }
 </style>
@@ -218,43 +219,62 @@ async function printHtmlToPdf(fileUrl: string): Promise<string> {
   )
   const driver = new Builder().forBrowser('chrome').setChromeOptions(opts as any).build()
 
-  try {
-    await driver.get(fileUrl)
-    // 等待所有图片加载完成（成功或失败都算 complete），避免 PDF 中图片缺失
-    await driver.wait(
-      async () => {
-        const done = await driver.executeScript<boolean>(() => {
-          if (document.readyState !== 'complete') return false
-          return Array.from(document.images).every((i) => i.complete)
-        })
-        return done
-      },
-      30000,
-      '等待页面图片加载超时',
-    )
-    // 额外等待一帧，确保布局与图片绘制完成
-    await driver.sleep(300)
+  // pageLoad 默认 5 分钟过长：本地页面 load 事件迟迟不来时 60s 即快速失败
+  await driver.manage().setTimeouts({ pageLoad: 60_000 })
 
-    // 注：@types/selenium-webdriver 将 printPage 返回类型误声明为 void，实际返回 Promise<base64 | {data}>
-    const result = (await (driver.printPage({
-      orientation: 'portrait',
-      scale: 1,
-      background: true,
-      width: 8.27, // A4 宽（英寸）
-      height: 11.69, // A4 高（英寸）
-      top: 0.6,
-      bottom: 0.6,
-      left: 0.7,
-      right: 0.7,
-      shrinkToFit: false,
-      pageRanges: [],
-    }) as unknown as Promise<any>)) as any
-    const base64 = typeof result === 'string' ? result : (result?.data ?? result?.value ?? '')
-    if (!base64) throw new Error('Chrome 打印 PDF 失败：返回内容为空')
-    return base64
+  try {
+    // driver.get / printPage 均无内置超时上限，大页面（百图级别）可能长时间卡死；
+    // 用总超时兜底，超时后 finally 中 driver.quit() 会终止会话并让挂起的命令失败
+    return await withTimeout(
+      runPrintFlow(driver, fileUrl),
+      120_000,
+      '生成 PDF 超时（>120s），可能页面过大或 Chrome 卡死',
+    )
   } finally {
-    await driver.quit()
+    // quit 同样加超时，防止会话清理本身卡住导致请求永不返回
+    try {
+      await withTimeout(driver.quit(), 15_000, 'driver.quit 超时')
+    } catch (e) {
+      console.error('[createPdf] driver.quit 失败/超时:', e instanceof Error ? e.message : e)
+    }
   }
+}
+
+/** 加载页面 -> 等待图片 -> 打印为 base64（各步均可能阻塞，由外层 withTimeout 兜底） */
+async function runPrintFlow(driver: WebDriver, fileUrl: string): Promise<string> {
+  await driver.get(fileUrl)
+  // 等待所有图片加载完成（成功或失败都算 complete），避免 PDF 中图片缺失
+  await driver.wait(
+    async () => {
+      const done = await driver.executeScript<boolean>(() => {
+        if (document.readyState !== 'complete') return false
+        return Array.from(document.images).every((i) => i.complete)
+      })
+      return done
+    },
+    30000,
+    '等待页面图片加载超时',
+  )
+  // 额外等待一帧，确保布局与图片绘制完成
+  await driver.sleep(300)
+
+  // 注：@types/selenium-webdriver 将 printPage 返回类型误声明为 void，实际返回 Promise<base64 | {data}>
+  const result = (await (driver.printPage({
+    orientation: 'portrait',
+    scale: 1,
+    background: true,
+    width: 8.27, // A4 宽（英寸）
+    height: 11.69, // A4 高（英寸）
+    top: 0.6,
+    bottom: 0.6,
+    left: 0.7,
+    right: 0.7,
+    shrinkToFit: false,
+    pageRanges: [],
+  }) as unknown as Promise<any>)) as any
+  const base64 = typeof result === 'string' ? result : (result?.data ?? result?.value ?? '')
+  if (!base64) throw new Error('Chrome 打印 PDF 失败：返回内容为空')
+  return base64
 }
 
 // ─── 工具方法 ───
@@ -266,4 +286,15 @@ function sanitizeFilename(name: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80)
+}
+
+/** 给 Promise 套一个总超时：超时则拒绝。原 Promise 无法取消（selenium 命令不可取消），由调用方后续 driver.quit() 终止会话 */
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(msg)), ms)
+  })
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
 }

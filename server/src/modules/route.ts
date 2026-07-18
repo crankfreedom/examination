@@ -2,6 +2,7 @@ import type { Request, Response } from 'express'
 import type { ApiResponse } from '@/utils/response'
 import {
   useCreateSmartPaper,
+  useSmartPaperCreatePdf,
   useSmartPaperDownload,
   useSmartPaperList,
 } from '@/modules/chalk/controllers/create-smart-paper'
@@ -45,6 +46,7 @@ export const routeDict: RouteModule[] = [
       { method: 'post', path: '/create/smart-paper', handler: useCreateSmartPaper, desc: '触发智能组卷采集' },
       { method: 'get', path: '/create/smart-paper', handler: useCreateSmartPaper, desc: '触发智能组卷采集' },
       { method: 'get', path: '/smart-paper/list', handler: useSmartPaperList, desc: '列出 smart-paper 目录下所有试卷文件夹信息' },
+      { method: 'get', path: '/smart-paper/create-pdf', handler: useSmartPaperCreatePdf, desc: '按试卷文件夹名读取 index.ts 生成 PDF 试卷' },
       { method: 'get', path: '/smart-paper/download', handler: useSmartPaperDownload, desc: '按 id 下载试卷文件夹压缩包' },
     ],
   },

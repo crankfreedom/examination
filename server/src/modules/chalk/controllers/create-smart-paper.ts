@@ -6,6 +6,8 @@ import { createSmartPaper } from '../services/chalk-crawler'
 import { successRes, failRes, type ApiResponse } from '@/utils/response'
 import { CODE } from '@/utils/code'
 import { chalkConfig } from '@/modules/chalk/config'
+import { createPdf } from '@/utils/create_pdf'
+import { createMutex } from '@/utils/mutex'
 
 /** 智能组卷列表项 */
 interface SmartPaperListItem {
@@ -113,4 +115,54 @@ export async function useSmartPaperDownload(req: Request, res: Response): Promis
 
   // 响应已流式写出，resWrapper 会因 res.headersSent 跳过 res.json
   return successRes({ message: '下载成功', data: null })
+}
+
+// PDF 生成互斥锁：createPdf 依赖无头 Chrome 且共用固定 user-data-dir，
+// 并发触发会争抢 Chrome 配置导致失败/卡死；用 tryRun 保证同一时刻仅一个任务在跑，
+// 其余请求立即返回“忙碌”，不排队、不堆积
+const pdfMutex = createMutex()
+
+/** GET /chalk/smart-paper/create-pdf - 按试卷文件夹名读取 index.ts 生成 PDF 试卷 */
+export async function useSmartPaperCreatePdf(req: Request, _res: Response): Promise<ApiResponse> {
+  const { id } = req.query
+  if (!id || typeof id !== 'string') {
+    return failRes({ code: CODE.PARAM_INVALID, message: '缺少参数 id（试卷文件夹名）' })
+  }
+
+  const baseDir = path.resolve(chalkConfig.outputDir, 'smart-paper')
+  const paperDir = path.resolve(baseDir, id)
+
+  // 防止路径穿越：解析后的路径必须仍在 baseDir 内
+  const rel = path.relative(baseDir, paperDir)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return failRes({ code: CODE.PARAM_INVALID, message: '非法的文件夹参数' })
+  }
+
+  // 文件夹不存在
+  if (!fs.existsSync(paperDir) || !fs.statSync(paperDir).isDirectory()) {
+    return failRes({ code: CODE.PARAM_INVALID, message: `试卷文件夹不存在：${id}` })
+  }
+
+  // index.ts 不存在：缺少试卷数据，无法生成 PDF
+  const indexTsPath = path.join(paperDir, 'index.ts')
+  if (!fs.existsSync(indexTsPath)) {
+    return failRes({ code: CODE.PARAM_INVALID, message: `试卷数据文件 index.ts 不存在：${id}` })
+  }
+
+  // 生成 PDF：直接输出到试卷文件夹内，与 index.ts / image/ 同级，便于随文件夹打包下载
+  // 互斥执行：并发触发会争抢 Chrome user-data-dir；已有任务在跑时立即返回“忙碌”，不排队
+  const task = pdfMutex.tryRun(() => createPdf(paperDir, paperDir))
+  if (!task) {
+    return failRes({ code: CODE.RATE_LIMIT, message: '已有生成任务进行中，请稍后重试' })
+  }
+  try {
+    const result = await task
+    return successRes({
+      message: `PDF 创建成功：${result.name}（共 ${result.count} 题）`,
+      data: { id, name: result.name, count: result.count, pdfPath: result.pdfPath },
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '生成 PDF 失败'
+    return failRes({ code: CODE.INTERNAL_ERROR, message: `PDF 创建失败：${message}` })
+  }
 }

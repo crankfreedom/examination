@@ -17,7 +17,7 @@ interface SmartPaperListItem {
   hasIndex: boolean
   /** 是否存在 pdf 文件 */
   hasPdf: boolean
-  /** 采集时间（取自 index.ts 中 paper.crawledAt，无 index.ts 时为空字符串） */
+  /** 采集时间（取自 index.ts 中 paper.crawledEndAt，兼容旧数据 paper.crawledAt；无 index.ts 时为空字符串） */
   crawledAt: string
 }
 
@@ -52,12 +52,12 @@ export async function useSmartPaperList(_req: Request, _res: Response): Promise<
         hasPdf = fs.readdirSync(paperDir).some(f => f.toLowerCase().endsWith('.pdf'))
       } catch { /* 目录读取失败视为无 pdf */ }
 
-      // 从 index.ts 中提取 paper.crawledAt
+      // 从 index.ts 中提取采集时间：新数据为 paper.crawledEndAt，旧数据为 paper.crawledAt
       let crawledAt = ''
       if (hasIndex) {
         try {
           const content = fs.readFileSync(indexTsPath, 'utf-8')
-          const match = content.match(/"crawledAt"\s*:\s*"([^"]*)"/)
+          const match = content.match(/"(?:crawledEndAt|crawledAt)"\s*:\s*"([^"]*)"/)
           if (match) crawledAt = match[1]
         } catch { /* 读取失败则 crawledAt 留空 */ }
       }

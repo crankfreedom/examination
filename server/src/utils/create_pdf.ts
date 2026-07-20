@@ -197,7 +197,7 @@ function renderPaperHtml(paper: SmartPaperJSON, imageMap: Map<string, ImageMeta>
 </head>
 <body>
   <h1 class="title">${escapeHtml(paper.paper.name)}</h1>
-  <div class="sub">共 ${total} 题　|　采集时间：${escapeHtml(paper.paper.crawledAt ?? '')}</div>
+  <div class="sub">共 ${total} 题　|　采集时间：${escapeHtml(paper.paper.crawledEndAt ?? paper.paper.crawledAt ?? '')}</div>
   ${sectionsHtml}
 </body>
 </html>`

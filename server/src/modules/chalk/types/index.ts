@@ -26,7 +26,8 @@ export interface RichOption {
 /** 单道题目数据 */
 export interface QuestionData {
   rank: number
-  type: string
+  questionType: 'single' | 'multiple'
+  anwserType: string
   group: string
   question: ContentBlock[]
   options: RichOption[]
@@ -66,8 +67,11 @@ export interface SmartPaperJSON {
   paper: {
     key: string
     name: string
-    answerUrl: string
-    crawledAt: string
+    anwserUrl: string
+    scrawlStartAt: string
+    crawledEndAt: string
+    /** 兼容旧数据：早期生成的试卷仅记录 crawledAt */
+    crawledAt?: string
   }
   sections: SectionData[]
   images: ImageMeta[]

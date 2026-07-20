@@ -31,7 +31,8 @@ async function main(): Promise<void> {
         fs.mkdirSync(paperDir, { recursive: true })
 
         // 图片保存到 {paperDir}/image/，与 index.ts 同级
-        const json = await crawler.examinationAnswer(paperDir)
+        crawler.setImageDir(paperDir)
+        const json = await crawler.scrawlSmartPaper()
         console.log('# 开始保存 #')
         const tsContent = `export default ${JSON.stringify(json, null, 2)}\n`
         const tsPath = path.join(paperDir, 'index.ts')

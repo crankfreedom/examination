@@ -5,7 +5,7 @@ import {
   useSmartPaperCreatePdf,
   useSmartPaperDownload,
   useSmartPaperList,
-} from '@/modules/chalk/controllers/create-smart-paper'
+} from '@/modules/chalk/controllers/smart-paper'
 
 /** 支持的 HTTP 方法 */
 export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete'
@@ -39,7 +39,7 @@ export interface RouteModule {
  * app.ts 依据此表为每个模块创建独立 Router 并挂载
  * 新增接口只需在对应模块的 routes 下追加一条记录；新增模块则追加一个元素
  */
-export const routeDict: RouteModule[] = [
+export const ROUTES: RouteModule[] = [
   {
     module: '/chalk',
     routes: [
